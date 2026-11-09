@@ -23,7 +23,7 @@ struct MenuView: View {
                             onExpand: { closeForm(); toggleExpanded(spec.id) },
                             onToggle: { closeForm(); store.setEnabled(spec.id, $0) },
                             onResolve: { store.resolveConflict(spec, $0) },
-                            onUpdate: { store.update(spec.id, local: $0, remote: $1) },
+                            onUpdate: { store.update(spec.id, local: $0, remote: $1, name: $2) },
                             onDelete: { store.delete(spec.id) }
                         )
                     }
@@ -251,8 +251,9 @@ private struct MappingLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // 右对齐、贴着箭头，箭头两侧间距才相等；最小宽度按 4 位端口定，各行箭头对齐成一列
             Text("本机 \(local)")
-                .frame(width: 78, alignment: .leading)
+                .frame(minWidth: 64, alignment: .trailing)
             Image(systemName: towardServer ? "arrow.right" : "arrow.left")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -273,11 +274,12 @@ private struct TunnelRow: View {
     let onToggle: (Bool) -> Void
     let onResolve: (ExternalTunnel) -> Void
     /// 返回错误信息，nil 表示成功
-    let onUpdate: (Int, Int) -> String?
+    let onUpdate: (Int, Int, String) -> String?
     let onDelete: () -> Void
     @State private var hovering = false
     @State private var editLocal = ""
     @State private var editRemote = ""
+    @State private var editName = ""
     @State private var editError: String?
 
     /// 只有处于端口冲突重试时，占用者才相关
@@ -306,6 +308,7 @@ private struct TunnelRow: View {
                             MappingLabel(local: String(spec.localPort), remote: String(spec.remotePort),
                                          towardServer: spec.kind == .forward)
                                 .foregroundStyle(spec.enabled ? .primary : .secondary)
+                                .layoutPriority(1)
                             if hasStatus {
                                 status
                                     .font(.caption)
@@ -314,11 +317,20 @@ private struct TunnelRow: View {
                             }
                         }
                         Spacer(minLength: 4)
+                        // 名称靠右、次要色；悬停/展开时把位置让给操作图标，空间不够时先截断名称
+                        if let name = spec.name, !(hovering || expanded) {
+                            Text(name)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .help(name)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(accessibilityTitle)，\(TunnelStore.statusText(runner))")
+                .accessibilityLabel("\(accessibilityTitle)\(spec.name.map { "，\($0)" } ?? "")，\(TunnelStore.statusText(runner))")
                 .accessibilityHint(expanded ? "收起详情" : "展开详情")
                 if hovering, runner.isConnected, let url = spec.url {
                     Button { NSWorkspace.shared.open(url) } label: {
@@ -328,16 +340,17 @@ private struct TunnelRow: View {
                     .help("在浏览器打开")
                     .accessibilityLabel("在浏览器打开")
                 }
-                Button(action: onExpand) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .contentShape(Rectangle())
+                if hovering || expanded {
+                    Button(action: onExpand) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)  // 与整行按钮重复
                 }
-                .buttonStyle(.plain)
-                .opacity(hovering || expanded ? 1 : 0)
-                .accessibilityHidden(true)  // 与整行按钮重复
                 Toggle(accessibilityTitle, isOn: Binding(get: { spec.enabled }, set: onToggle))
                     .toggleStyle(.switch)
                     .controlSize(.mini)
@@ -413,7 +426,10 @@ private struct TunnelRow: View {
     }
 
     private var editor: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("名称（可选）", text: $editName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(save)
             HStack(spacing: 6) {
                 PortField(label: "本机", text: $editLocal, placeholder: String(spec.localPort), onSubmit: save)
                 Image(systemName: spec.kind == .forward ? "arrow.right" : "arrow.left")
@@ -453,13 +469,14 @@ private struct TunnelRow: View {
         NSApp.activate()
         editLocal = String(spec.localPort)
         editRemote = String(spec.remotePort)
+        editName = spec.name ?? ""
         editError = nil
         editing = true
     }
 
     private func save() {
         guard let (l, r) = parsedEdit else { return }
-        editError = onUpdate(l, r)
+        editError = onUpdate(l, r, editName)
         if editError == nil { editing = false }
     }
 
@@ -475,7 +492,7 @@ private struct TunnelRow: View {
                 if let blocker, blocker.canTerminate {
                     Button("结束占用进程") { onResolve(blocker) }
                 }
-                Button("修改端口", action: startEditing)
+                Button("编辑", action: startEditing)
                 Button("复制命令") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(spec.shellCommand, forType: .string)
@@ -588,7 +605,10 @@ private struct AddTunnelForm: View {
         guard !ui.draft.host.isEmpty,
               let l = local ?? fallbackLocal, let r = remote ?? local,
               (1...65535).contains(l), (1...65535).contains(r) else { return nil }
-        return TunnelSpec(host: ui.draft.host, kind: ui.draft.kind, localPort: l, remotePort: r)
+        var spec = TunnelSpec(host: ui.draft.host, kind: ui.draft.kind, localPort: l, remotePort: r)
+        let name = ui.draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        spec.name = name.isEmpty ? nil : name
+        return spec
     }
 
     var body: some View {
@@ -630,6 +650,10 @@ private struct AddTunnelForm: View {
             }
 
             if ui.draft.kind == .forward { suggestions }
+
+            TextField("名称（可选）", text: $ui.draft.name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(submit)
 
             HStack {
                 Spacer()
@@ -765,6 +789,7 @@ private struct AddTunnelForm: View {
         store.setEnabled(store.upsert(spec).id, true)
         ui.draft.local = ""
         ui.draft.remote = ""
+        ui.draft.name = ""
         ui.adding = false
     }
 }

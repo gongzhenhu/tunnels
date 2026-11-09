@@ -72,6 +72,7 @@ final class UIState {
         var host = ""
         var local = ""
         var remote = ""
+        var name = ""
     }
 
     var adding = false

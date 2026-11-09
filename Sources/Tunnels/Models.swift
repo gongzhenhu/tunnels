@@ -17,6 +17,8 @@ struct TunnelSpec: Codable, Identifiable, Hashable {
     var remotePort: Int
     /// 用户期望的开关状态，App 重启时据此恢复
     var enabled = false
+    /// 用户给的备注（这个端口跑的是什么）；可选，旧配置里没有这个字段
+    var name: String?
 
     /// 反向隧道最常见的用途是把本机 Clash 借给服务器
     static let defaultReverseLocalPort = 7890

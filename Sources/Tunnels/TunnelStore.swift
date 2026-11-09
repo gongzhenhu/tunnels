@@ -124,7 +124,10 @@ final class TunnelStore {
 
     @discardableResult
     func upsert(_ spec: TunnelSpec) -> TunnelSpec {
-        if let existing = specs.first(where: { $0.sameEndpoint(as: spec) }) { return existing }
+        if let i = specs.firstIndex(where: { $0.sameEndpoint(as: spec) }) {
+            if spec.name != nil, specs[i].name != spec.name { specs[i].name = spec.name; save() }
+            return specs[i]
+        }
         specs.append(spec)
         runners[spec.id] = TunnelRunner(spec: spec)
         save()
@@ -139,13 +142,19 @@ final class TunnelStore {
     }
 
     /// 修改端口：保留 id 和开关状态，开着的隧道会用新端口重连。返回错误信息
-    func update(_ id: UUID, local: Int, remote: Int) -> String? {
+    func update(_ id: UUID, local: Int, remote: Int, name: String?) -> String? {
         guard let i = specs.firstIndex(where: { $0.id == id }) else { return "隧道不存在" }
         var spec = specs[i]
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        spec.name = trimmed?.isEmpty == false ? trimmed : nil
         spec.localPort = local
         spec.remotePort = remote
         if specs.contains(where: { $0.id != id && $0.sameEndpoint(as: spec) }) { return "已有相同的隧道" }
-        guard !spec.sameEndpoint(as: specs[i]) else { return nil }
+        // 只改名称：不必重连
+        guard !spec.sameEndpoint(as: specs[i]) else {
+            if spec.name != specs[i].name { specs[i].name = spec.name; save() }
+            return nil
+        }
         runners[id]?.stop()
         specs[i] = spec
         runners[id] = TunnelRunner(spec: spec)
